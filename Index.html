@@ -1,0 +1,1886 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Scissors, Check, Clock, ChevronLeft, User, Phone, Calendar, Plus, Trash2, Lock, Shield, Star, Camera, Bell, X } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+
+// ---- Design tokens ----
+// Palette: charcoal ground, ivory paper, brass signage, deep burgundy accent
+const C = {
+  charcoal: "#1C1B19",
+  charcoal2: "#242220",
+  ivory: "#EDE7D9",
+  ivoryDim: "#C9C2AF",
+  brass: "#B8935F",
+  brassBright: "#D4AF7A",
+  burgundy: "#6B2737",
+};
+
+const DEFAULT_EMPLOYEES = [
+  { id: "e1", name: "Abu Zain", title: "Master Barber", password: "1234", isAdmin: false, isBarber: true },
+  { id: "e2", name: "Muhammad Nasser", title: "Barber", password: "1234", isAdmin: false, isBarber: true },
+  { id: "e3", name: "Fareg", title: "Manager", password: "1234", isAdmin: true, isBarber: false },
+];
+
+const SLOT_TIMES = [
+  "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM",
+  "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM",
+  "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM", "6:00 PM", "6:30 PM",
+];
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function formatClockTime(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function pushNotification(notifications, setNotifications, entry) {
+  setNotifications([
+    ...notifications,
+    {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      time: Date.now(),
+      read: false,
+      ...entry,
+    },
+  ]);
+}
+
+function useSharedState(key, fallback) {
+  const [value, setValue] = useState(fallback);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await window.storage.get(key, true);
+        if (mounted && res) setValue(JSON.parse(res.value));
+      } catch (e) {
+        // key not found yet -- keep fallback
+      } finally {
+        if (mounted) setLoaded(true);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [key]);
+
+  const persist = useCallback(
+    async (next) => {
+      setValue(next);
+      try {
+        await window.storage.set(key, JSON.stringify(next), true);
+      } catch (e) {
+        console.error("storage set failed", e);
+      }
+    },
+    [key]
+  );
+
+  return [value, persist, loaded];
+}
+
+function BarberPole({ size = 28 }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        overflow: "hidden",
+        position: "relative",
+        border: `2px solid ${C.brass}`,
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: -4,
+          backgroundImage: `repeating-linear-gradient(45deg, ${C.burgundy} 0 6px, ${C.ivory} 6px 12px, ${C.charcoal} 12px 18px)`,
+          animation: "spin-stripes 3s linear infinite",
+        }}
+      />
+      <style>{`
+        @keyframes spin-stripes {
+          from { transform: translateX(0); }
+          to { transform: translateX(-18px); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function Avatar({ emp, size = 28 }) {
+  if (emp?.photo) {
+    return (
+      <img
+        src={emp.photo}
+        alt={emp.name}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          objectFit: "cover",
+          border: `2px solid ${C.brass}`,
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+  return <BarberPole size={size} />;
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function PhotoPicker({ value, onChange, size = 28 }) {
+  const inputRef = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await readFileAsDataURL(file);
+      onChange(dataUrl);
+    } catch (err) {
+      console.error("Failed to read image", err);
+    }
+    e.target.value = "";
+  };
+
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <Avatar emp={{ photo: value }} size={size} />
+      <button
+        onClick={() => inputRef.current?.click()}
+        style={{
+          position: "absolute",
+          bottom: -2,
+          right: -2,
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          background: C.burgundy,
+          border: `2px solid ${C.charcoal2}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          padding: 0,
+        }}
+        aria-label="Choose photo"
+      >
+        <Camera size={9} color={C.ivory} />
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFile}
+        style={{ display: "none" }}
+      />
+    </div>
+  );
+}
+
+function StatusDot({ on }) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: on ? "#7CA37A" : C.ivoryDim,
+        boxShadow: on ? "0 0 8px #7CA37A" : "none",
+        marginRight: 8,
+      }}
+    />
+  );
+}
+
+function StaffLogin({ employees, onLogin }) {
+  const [pickedId, setPickedId] = useState(null);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState(false);
+
+  const picked = employees.find((e) => e.id === pickedId);
+
+  const submit = () => {
+    if (value === (picked?.password || "")) {
+      onLogin(picked.id);
+    } else {
+      setError(true);
+      setValue("");
+    }
+  };
+
+  if (!picked) {
+    return (
+      <div style={{ padding: "40px 20px" }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: "50%",
+              background: "rgba(184,147,95,0.12)",
+              border: `1px solid ${C.brass}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 20px",
+            }}
+          >
+            <Lock size={20} color={C.brass} />
+          </div>
+          <div
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: 20,
+              color: C.ivory,
+              marginBottom: 6,
+            }}
+          >
+            Who's clocking in?
+          </div>
+          <div
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              color: C.ivoryDim,
+            }}
+          >
+            Select your name to log in
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {employees.map((emp) => (
+            <button
+              key={emp.id}
+              onClick={() => {
+                setPickedId(emp.id);
+                setError(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                background: C.charcoal2,
+                border: "1px solid #3A3733",
+                borderRadius: 10,
+                padding: "14px 16px",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <Avatar emp={emp} size={24} />
+              <div
+                style={{
+                  fontFamily: "'Fraunces', serif",
+                  fontSize: 16,
+                  color: C.ivory,
+                }}
+              >
+                {emp.name}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "60px 20px", textAlign: "center" }}>
+      <button
+        onClick={() => {
+          setPickedId(null);
+          setValue("");
+          setError(false);
+        }}
+        style={{ ...backBtnStyle, margin: "0 auto 20px" }}
+      >
+        <ChevronLeft size={14} /> Not {picked.name}?
+      </button>
+      <div
+        style={{
+          fontFamily: "'Fraunces', serif",
+          fontSize: 20,
+          color: C.ivory,
+          marginBottom: 6,
+        }}
+      >
+        {picked.name}
+      </div>
+      <div
+        style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 12,
+          color: C.ivoryDim,
+          marginBottom: 22,
+        }}
+      >
+        Enter your password
+      </div>
+      <input
+        type="password"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setError(false);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="Password"
+        style={{ ...inputStyle, maxWidth: 220, margin: "0 auto", textAlign: "center" }}
+        autoFocus
+      />
+      {error && (
+        <div
+          style={{
+            color: C.burgundy,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12,
+            marginTop: 10,
+          }}
+        >
+          Incorrect password
+        </div>
+      )}
+      <button
+        onClick={submit}
+        disabled={!value}
+        style={{
+          marginTop: 18,
+          padding: "12px 28px",
+          borderRadius: 8,
+          border: "none",
+          background: value ? C.burgundy : "#3A3733",
+          color: C.ivory,
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13,
+          cursor: value ? "pointer" : "not-allowed",
+        }}
+      >
+        Log in
+      </button>
+    </div>
+  );
+}
+
+function StaffView({ employees, setEmployees, statuses, setStatuses, clockIns, setClockIns, clockOuts, setClockOuts, bookings, setBookings, notifications, setNotifications, loggedInId, onLogout }) {
+  const [manageOpen, setManageOpen] = useState(false);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [newEmpPassword, setNewEmpPassword] = useState("");
+  const [newEmpAdmin, setNewEmpAdmin] = useState(false);
+  const [newEmpIsBarber, setNewEmpIsBarber] = useState(true);
+  const [newEmpPhoto, setNewEmpPhoto] = useState(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const [resetPasswordId, setResetPasswordId] = useState(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+
+  const me = employees.find((e) => e.id === loggedInId);
+  const isAdmin = !!me?.isAdmin;
+  const adminCount = employees.filter((e) => e.isAdmin).length;
+
+  const myNotifications = notifications
+    .filter((n) => n.employeeId === loggedInId)
+    .sort((a, b) => b.time - a.time);
+  const unreadCount = myNotifications.filter((n) => !n.read).length;
+
+  const openBell = () => {
+    setBellOpen((v) => !v);
+    if (!bellOpen && unreadCount > 0) {
+      setNotifications(
+        notifications.map((n) => (n.employeeId === loggedInId ? { ...n, read: true } : n))
+      );
+    }
+  };
+
+  const myToday = bookings
+    .filter((b) => b.employeeId === loggedInId && b.day === todayKey())
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  const cancelBooking = (booking) => {
+    setBookings(bookings.filter((b) => b.id !== booking.id));
+    pushNotification(notifications, setNotifications, {
+      employeeId: booking.employeeId,
+      type: "canceled",
+      message: `Canceled: ${booking.customerName}'s ${booking.time} appointment`,
+    });
+  };
+
+  const toggle = (id) => {
+    if (id !== loggedInId) return;
+    const turningOn = !statuses[id];
+    setStatuses({ ...statuses, [id]: turningOn });
+    if (turningOn) {
+      setClockIns({ ...clockIns, [id]: Date.now() });
+    } else {
+      const next = { ...clockIns };
+      delete next[id];
+      setClockIns(next);
+      setClockOuts({ ...clockOuts, [id]: Date.now() });
+    }
+  };
+
+  const addEmployee = () => {
+    if (!newName.trim() || !newEmpPassword.trim()) return;
+    const id = `e-${Date.now()}`;
+    const next = [
+      ...employees,
+      {
+        id,
+        name: newName.trim(),
+        title: newTitle.trim() || "Barber",
+        password: newEmpPassword.trim(),
+        isAdmin: newEmpAdmin,
+        isBarber: newEmpIsBarber,
+        photo: newEmpPhoto,
+      },
+    ];
+    setEmployees(next);
+    setNewName("");
+    setNewTitle("");
+    setNewEmpPassword("");
+    setNewEmpAdmin(false);
+    setNewEmpIsBarber(true);
+    setNewEmpPhoto(null);
+  };
+
+  const setEmployeePhoto = (id, dataUrl) => {
+    setEmployees(employees.map((e) => (e.id === id ? { ...e, photo: dataUrl } : e)));
+  };
+
+
+  const saveResetPassword = (id) => {
+    if (!resetPasswordValue.trim()) return;
+    setEmployees(
+      employees.map((e) =>
+        e.id === id ? { ...e, password: resetPasswordValue.trim() } : e
+      )
+    );
+    setResetPasswordId(null);
+    setResetPasswordValue("");
+  };
+
+  const toggleAdmin = (id) => {
+    const emp = employees.find((e) => e.id === id);
+    if (emp?.isAdmin && adminCount <= 1) return; // keep at least one admin
+    setEmployees(employees.map((e) => (e.id === id ? { ...e, isAdmin: !e.isAdmin } : e)));
+  };
+
+  const removeEmployee = (id) => {
+    const emp = employees.find((e) => e.id === id);
+    if (emp?.isAdmin && adminCount <= 1) return; // keep at least one admin
+    setEmployees(employees.filter((e) => e.id !== id));
+    const nextStatuses = { ...statuses };
+    delete nextStatuses[id];
+    setStatuses(nextStatuses);
+    const nextClockIns = { ...clockIns };
+    delete nextClockIns[id];
+    setClockIns(nextClockIns);
+    const nextClockOuts = { ...clockOuts };
+    delete nextClockOuts[id];
+    setClockOuts(nextClockOuts);
+    setConfirmRemoveId(null);
+  };
+
+  return (
+    <div style={{ padding: "28px 20px 40px" }}>
+      <div
+        style={{
+          marginBottom: 24,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: 26,
+              color: C.ivory,
+              letterSpacing: 0.2,
+            }}
+          >
+            Staff Board
+          </div>
+          <div
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              color: C.ivoryDim,
+              marginTop: 4,
+              textTransform: "uppercase",
+              letterSpacing: 1.5,
+            }}
+          >
+            Logged in as {me?.name || "—"}{isAdmin ? " · Admin" : ""}
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={openBell}
+                style={{
+                  background: "none",
+                  border: `1px solid #3A3733`,
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  cursor: "pointer",
+                  color: C.ivoryDim,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+                aria-label="Notifications"
+              >
+                <Bell size={16} />
+              </button>
+              {unreadCount > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    background: C.burgundy,
+                    color: C.ivory,
+                    fontSize: 10,
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    borderRadius: 10,
+                    minWidth: 16,
+                    height: 16,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "0 3px",
+                  }}
+                >
+                  {unreadCount}
+                </div>
+              )}
+            </div>
+            {isAdmin && (
+              <button
+                onClick={() => setManageOpen((v) => !v)}
+                style={{
+                  ...backBtnStyle,
+                  border: `1px solid #3A3733`,
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                  flexShrink: 0,
+                }}
+              >
+                {manageOpen ? "Done" : "Manage staff"}
+              </button>
+            )}
+          </div>
+          <button onClick={onLogout} style={{ ...backBtnStyle, color: C.ivoryDim }}>
+            Log out
+          </button>
+        </div>
+      </div>
+
+      {bellOpen && (
+        <div
+          style={{
+            marginBottom: 22,
+            border: `1px solid #3A3733`,
+            borderRadius: 10,
+            background: C.charcoal2,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 14px",
+              borderBottom: "1px solid #3A3733",
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              color: C.ivoryDim,
+              textTransform: "uppercase",
+              letterSpacing: 1,
+            }}
+          >
+            Notifications
+            <button
+              onClick={() => setBellOpen(false)}
+              style={{ background: "none", border: "none", color: C.ivoryDim, cursor: "pointer", padding: 2 }}
+              aria-label="Close notifications"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {myNotifications.length === 0 ? (
+            <div
+              style={{
+                padding: "18px 14px",
+                textAlign: "center",
+                color: C.ivoryDim,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 12,
+              }}
+            >
+              No notifications yet.
+            </div>
+          ) : (
+            <div style={{ maxHeight: 240, overflowY: "auto" }}>
+              {myNotifications.map((n) => (
+                <div
+                  key={n.id}
+                  style={{
+                    padding: "10px 14px",
+                    borderBottom: "1px solid #2E2C29",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 8,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      marginTop: 4,
+                      flexShrink: 0,
+                      background: n.type === "canceled" ? C.burgundy : "#7CA37A",
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.ivory }}>
+                      {n.message}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: C.ivoryDim, marginTop: 2 }}>
+                      {formatClockTime(n.time)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {myToday.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <div
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              color: C.ivoryDim,
+              textTransform: "uppercase",
+              letterSpacing: 1,
+              marginBottom: 8,
+            }}
+          >
+            My schedule today
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {myToday.map((b) => (
+              <div
+                key={b.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  background: C.charcoal2,
+                  border: "1px solid #3A3733",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                }}
+              >
+                <div>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontSize: 15, color: C.ivory }}>
+                    {b.time} &middot; {b.customerName}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: C.ivoryDim, marginTop: 2 }}>
+                    {b.phone}
+                  </div>
+                </div>
+                <button
+                  onClick={() => cancelBooking(b)}
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: C.ivory,
+                    background: C.burgundy,
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {manageOpen && isAdmin && (
+        <div
+          style={{
+            marginBottom: 22,
+            padding: 16,
+            borderRadius: 10,
+            border: `1px solid ${C.brass}55`,
+            background: "rgba(184,147,95,0.06)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+            <PhotoPicker value={newEmpPhoto} onChange={setNewEmpPhoto} size={56} />
+          </div>
+          <label style={labelStyle}>
+            <User size={13} /> New employee name
+          </label>
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Full name"
+            style={inputStyle}
+          />
+          <label style={{ ...labelStyle, marginTop: 12 }}>Title (optional)</label>
+          <input
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="e.g. Master Barber"
+            style={inputStyle}
+          />
+          <label style={{ ...labelStyle, marginTop: 12 }}>
+            <Lock size={13} /> Their password
+          </label>
+          <input
+            type="password"
+            value={newEmpPassword}
+            onChange={(e) => setNewEmpPassword(e.target.value)}
+            placeholder="Set a password for them"
+            style={inputStyle}
+          />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 14,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              color: C.ivoryDim,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={newEmpAdmin}
+              onChange={(e) => setNewEmpAdmin(e.target.checked)}
+            />
+            Make this person an admin
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 8,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              color: C.ivoryDim,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={newEmpIsBarber}
+              onChange={(e) => setNewEmpIsBarber(e.target.checked)}
+            />
+            This person is a barber (bookable and reviewable by customers)
+          </label>
+          <button
+            onClick={addEmployee}
+            disabled={!newName.trim() || !newEmpPassword.trim()}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              padding: "12px 0",
+              borderRadius: 8,
+              border: "none",
+              background: newName.trim() && newEmpPassword.trim() ? C.burgundy : "#3A3733",
+              color: C.ivory,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 13,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              cursor: newName.trim() && newEmpPassword.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            <Plus size={14} /> Add employee
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {employees.length === 0 && (
+          <div
+            style={{
+              border: `1px dashed #3A3733`,
+              borderRadius: 10,
+              padding: "24px 18px",
+              textAlign: "center",
+              color: C.ivoryDim,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 13,
+            }}
+          >
+            No employees yet. Tap "Manage staff" to add one.
+          </div>
+        )}
+        {employees.map((emp) => {
+          const on = !!statuses[emp.id];
+          const confirming = confirmRemoveId === emp.id;
+          return (
+            <div
+              key={emp.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                width: "100%",
+                background: on ? "rgba(124,163,122,0.08)" : C.charcoal2,
+                border: `1px solid ${on ? "#7CA37A55" : "#3A3733"}`,
+                borderRadius: 10,
+                padding: "16px 18px",
+              }}
+            >
+              <button
+                onClick={() => toggle(emp.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  flex: 1,
+                }}
+              >
+                <Avatar emp={emp} size={26} />
+                <div>
+                  <div
+                    style={{
+                      fontFamily: "'Fraunces', serif",
+                      fontSize: 17,
+                      color: C.ivory,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    {emp.name}
+                    {emp.isAdmin && <Shield size={13} color={C.brass} />}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: C.ivoryDim,
+                      marginTop: 2,
+                    }}
+                  >
+                    {emp.title}
+                  </div>
+                </div>
+              </button>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div
+                  onClick={() => toggle(emp.id)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-end",
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 12,
+                    color: on ? "#7CA37A" : C.ivoryDim,
+                    cursor: emp.id === loggedInId ? "pointer" : "default",
+                    opacity: emp.id === loggedInId ? 1 : 0.55,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", textTransform: "uppercase", letterSpacing: 1 }}>
+                    <StatusDot on={on} />
+                    {on ? "Clocked in" : "Off shift"}
+                  </div>
+                  {on && isAdmin && clockIns[emp.id] && (
+                    <div style={{ fontSize: 10, color: C.ivoryDim, marginTop: 2 }}>
+                      since {formatClockTime(clockIns[emp.id])}
+                    </div>
+                  )}
+                  {!on && isAdmin && clockOuts[emp.id] && (
+                    <div style={{ fontSize: 10, color: C.ivoryDim, marginTop: 2 }}>
+                      last out {formatClockTime(clockOuts[emp.id])}
+                    </div>
+                  )}
+                </div>
+
+                {manageOpen && isAdmin && (
+                  confirming ? (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        onClick={() => removeEmployee(emp.id)}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: C.ivory,
+                          background: C.burgundy,
+                          border: "none",
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setConfirmRemoveId(null)}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: C.ivoryDim,
+                          background: "none",
+                          border: `1px solid #3A3733`,
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : resetPasswordId === emp.id ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        type="password"
+                        value={resetPasswordValue}
+                        onChange={(e) => setResetPasswordValue(e.target.value)}
+                        placeholder="New password"
+                        style={{ ...inputStyle, width: 120, padding: "6px 8px", fontSize: 11 }}
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => saveResetPassword(emp.id)}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: C.ivory,
+                          background: C.burgundy,
+                          border: "none",
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => {
+                          setResetPasswordId(null);
+                          setResetPasswordValue("");
+                        }}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: C.ivoryDim,
+                          background: "none",
+                          border: `1px solid #3A3733`,
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <PhotoPicker
+                        value={emp.photo}
+                        onChange={(dataUrl) => setEmployeePhoto(emp.id, dataUrl)}
+                        size={22}
+                      />
+                      <button
+                        onClick={() => toggleAdmin(emp.id)}
+                        disabled={emp.isAdmin && adminCount <= 1}
+                        title={emp.isAdmin ? "Remove admin" : "Make admin"}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: emp.isAdmin ? C.brass : C.ivoryDim,
+                          cursor: emp.isAdmin && adminCount <= 1 ? "not-allowed" : "pointer",
+                          padding: 4,
+                          opacity: emp.isAdmin && adminCount <= 1 ? 0.4 : 1,
+                        }}
+                        aria-label={emp.isAdmin ? `Remove admin from ${emp.name}` : `Make ${emp.name} admin`}
+                      >
+                        <Shield size={16} />
+                      </button>
+                      <button
+                        onClick={() => setResetPasswordId(emp.id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: C.ivoryDim,
+                          cursor: "pointer",
+                          padding: 4,
+                        }}
+                        aria-label={`Reset password for ${emp.name}`}
+                      >
+                        <Lock size={16} />
+                      </button>
+                      <button
+                        onClick={() => setConfirmRemoveId(emp.id)}
+                        disabled={emp.isAdmin && adminCount <= 1}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: C.ivoryDim,
+                          cursor: emp.isAdmin && adminCount <= 1 ? "not-allowed" : "pointer",
+                          padding: 4,
+                          opacity: emp.isAdmin && adminCount <= 1 ? 0.4 : 1,
+                        }}
+                        aria-label={`Remove ${emp.name}`}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </>
+                  )
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BookView({ employees, statuses, bookings, setBookings, notifications, setNotifications }) {
+  const [step, setStep] = useState(1); // 1 pick barber, 2 pick time, 3 details, 4 done
+  const [barberId, setBarberId] = useState(null);
+  const [time, setTime] = useState(null);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const available = employees.filter((e) => statuses[e.id] && e.isBarber);
+  const day = todayKey();
+  const takenTimes = bookings
+    .filter((b) => b.employeeId === barberId && b.day === day)
+    .map((b) => b.time);
+
+  const reset = () => {
+    setStep(1);
+    setBarberId(null);
+    setTime(null);
+    setName("");
+    setPhone("");
+  };
+
+  const confirm = () => {
+    const next = [
+      ...bookings,
+      {
+        id: `${Date.now()}`,
+        employeeId: barberId,
+        time,
+        day,
+        customerName: name,
+        phone,
+      },
+    ];
+    setBookings(next);
+    pushNotification(notifications, setNotifications, {
+      employeeId: barberId,
+      type: "booked",
+      message: `New booking: ${name} at ${time}`,
+    });
+    setStep(4);
+  };
+
+  const barber = employees.find((e) => e.id === barberId);
+
+  return (
+    <div style={{ padding: "28px 20px 40px" }}>
+      <div style={{ marginBottom: 24 }}>
+        <div
+          style={{
+            fontFamily: "'Fraunces', serif",
+            fontSize: 26,
+            color: C.ivory,
+          }}
+        >
+          Book a Barber
+        </div>
+        <div
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12,
+            color: C.ivoryDim,
+            marginTop: 4,
+            textTransform: "uppercase",
+            letterSpacing: 1.5,
+          }}
+        >
+          {step === 1 && "Only barbers on shift right now can be booked"}
+          {step === 2 && `With ${barber?.name}`}
+          {step === 3 && "Your details"}
+          {step === 4 && "Confirmed"}
+        </div>
+      </div>
+
+      {step === 1 && (
+        <>
+          {available.length === 0 ? (
+            <div
+              style={{
+                border: `1px dashed #3A3733`,
+                borderRadius: 10,
+                padding: "28px 18px",
+                textAlign: "center",
+                color: C.ivoryDim,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 13,
+              }}
+            >
+              No barbers are clocked in right now. Please check back soon.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {available.map((emp) => (
+                <button
+                  key={emp.id}
+                  onClick={() => {
+                    setBarberId(emp.id);
+                    setStep(2);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    background: C.charcoal2,
+                    border: `1px solid #3A3733`,
+                    borderRadius: 10,
+                    padding: "16px 18px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <Avatar emp={emp} size={30} />
+                  <div style={{ flex: 1 }}>
+                    <div
+                      style={{
+                        fontFamily: "'Fraunces', serif",
+                        fontSize: 17,
+                        color: C.ivory,
+                      }}
+                    >
+                      {emp.name}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: "#7CA37A",
+                        marginTop: 2,
+                        textTransform: "uppercase",
+                        letterSpacing: 1,
+                      }}
+                    >
+                      <StatusDot on={true} />
+                      Available now
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <button onClick={() => setStep(1)} style={backBtnStyle}>
+            <ChevronLeft size={14} /> Change barber
+          </button>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, 1fr)",
+              gap: 10,
+              marginTop: 16,
+            }}
+          >
+            {SLOT_TIMES.map((t) => {
+              const taken = takenTimes.includes(t);
+              return (
+                <button
+                  key={t}
+                  disabled={taken}
+                  onClick={() => {
+                    setTime(t);
+                    setStep(3);
+                  }}
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 13,
+                    padding: "12px 0",
+                    borderRadius: 8,
+                    border: `1px solid ${taken ? "#2A2825" : "#3A3733"}`,
+                    background: taken ? "#201F1C" : C.charcoal2,
+                    color: taken ? "#5A574F" : C.ivory,
+                    cursor: taken ? "not-allowed" : "pointer",
+                    textDecoration: taken ? "line-through" : "none",
+                  }}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <button onClick={() => setStep(2)} style={backBtnStyle}>
+            <ChevronLeft size={14} /> Change time
+          </button>
+          <div
+            style={{
+              marginTop: 16,
+              marginBottom: 20,
+              padding: "14px 16px",
+              borderRadius: 10,
+              background: "rgba(184,147,95,0.08)",
+              border: `1px solid ${C.brass}55`,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              color: C.brassBright,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <Clock size={14} /> {barber?.name} &middot; {time}
+          </div>
+
+          <label style={labelStyle}>
+            <User size={13} /> Name
+          </label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Your name"
+            style={inputStyle}
+          />
+          <label style={{ ...labelStyle, marginTop: 14 }}>
+            <Phone size={13} /> Phone
+          </label>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Your phone number"
+            style={inputStyle}
+          />
+
+          <button
+            onClick={confirm}
+            disabled={!name.trim() || !phone.trim()}
+            style={{
+              marginTop: 22,
+              width: "100%",
+              padding: "14px 0",
+              borderRadius: 8,
+              border: "none",
+              background: name.trim() && phone.trim() ? C.burgundy : "#3A3733",
+              color: C.ivory,
+              fontFamily: "'Fraunces', serif",
+              fontSize: 16,
+              cursor: name.trim() && phone.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            Confirm booking
+          </button>
+        </>
+      )}
+
+      {step === 4 && (
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: "50%",
+              background: "rgba(124,163,122,0.15)",
+              border: "1px solid #7CA37A",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 18px",
+            }}
+          >
+            <Check size={24} color="#7CA37A" />
+          </div>
+          <div
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: 20,
+              color: C.ivory,
+              marginBottom: 6,
+            }}
+          >
+            You're booked
+          </div>
+          <div
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 13,
+              color: C.ivoryDim,
+              lineHeight: 1.7,
+            }}
+          >
+            {barber?.name} &middot; {time}
+            <br />
+            See you then, {name.split(" ")[0]}.
+          </div>
+          <button onClick={reset} style={{ ...backBtnStyle, margin: "24px auto 0" }}>
+            Book another
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StarInput({ value, onChange, size = 26 }) {
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          onClick={() => onChange(n)}
+          style={{ background: "none", border: "none", padding: 2, cursor: "pointer" }}
+          aria-label={`${n} star${n > 1 ? "s" : ""}`}
+        >
+          <Star
+            size={size}
+            color={C.brass}
+            fill={n <= value ? C.brass : "none"}
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StarRow({ rating, size = 13 }) {
+  return (
+    <div style={{ display: "flex", gap: 2 }}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <Star key={n} size={size} color={C.brass} fill={n <= rating ? C.brass : "none"} />
+      ))}
+    </div>
+  );
+}
+
+function ReviewsView({ employees, reviews, setReviews }) {
+  const barbers = employees.filter((e) => e.isBarber);
+  const [barberId, setBarberId] = useState(barbers[0]?.id || null);
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [name, setName] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  const submit = () => {
+    if (!barberId || !rating) return;
+    setReviews([
+      ...reviews,
+      {
+        id: `${Date.now()}`,
+        employeeId: barberId,
+        rating,
+        comment: comment.trim(),
+        customerName: name.trim() || "Anonymous",
+        day: todayKey(),
+      },
+    ]);
+    setSubmitted(true);
+    setRating(0);
+    setComment("");
+    setName("");
+    setTimeout(() => setSubmitted(false), 2500);
+  };
+
+  const chartData = barbers.map((emp) => {
+    const empReviews = reviews.filter((r) => r.employeeId === emp.id);
+    const avg = empReviews.length
+      ? empReviews.reduce((sum, r) => sum + r.rating, 0) / empReviews.length
+      : 0;
+    return { name: emp.name, avg: Math.round(avg * 10) / 10, count: empReviews.length };
+  });
+
+  const recent = [...reviews].sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 8);
+
+  return (
+    <div style={{ padding: "28px 20px 40px" }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, color: C.ivory }}>Reviews</div>
+        <div
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12,
+            color: C.ivoryDim,
+            marginTop: 4,
+            textTransform: "uppercase",
+            letterSpacing: 1.5,
+          }}
+        >
+          Rate your barber and see how everyone's doing
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div
+        style={{
+          background: C.charcoal2,
+          border: "1px solid #3A3733",
+          borderRadius: 10,
+          padding: "16px 12px 8px",
+          marginBottom: 28,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: C.ivoryDim,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            marginBottom: 8,
+            paddingLeft: 4,
+          }}
+        >
+          Average rating
+        </div>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#3A3733" vertical={false} />
+            <XAxis
+              dataKey="name"
+              tick={{ fill: C.ivoryDim, fontSize: 11, fontFamily: "IBM Plex Mono" }}
+              axisLine={{ stroke: "#3A3733" }}
+              tickLine={false}
+            />
+            <YAxis
+              domain={[0, 5]}
+              tick={{ fill: C.ivoryDim, fontSize: 11, fontFamily: "IBM Plex Mono" }}
+              axisLine={{ stroke: "#3A3733" }}
+              tickLine={false}
+            />
+            <Tooltip
+              contentStyle={{
+                background: C.charcoal,
+                border: "1px solid #3A3733",
+                borderRadius: 8,
+                fontFamily: "IBM Plex Mono",
+                fontSize: 12,
+              }}
+              labelStyle={{ color: C.ivory }}
+              formatter={(value, key, entry) => [
+                `${value} ★ (${entry.payload.count} review${entry.payload.count === 1 ? "" : "s"})`,
+                "Rating",
+              ]}
+            />
+            <Bar dataKey="avg" radius={[4, 4, 0, 0]}>
+              {chartData.map((_, i) => (
+                <Cell key={i} fill={C.brass} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Submit a review */}
+      <div
+        style={{
+          border: `1px solid ${C.brass}55`,
+          background: "rgba(184,147,95,0.06)",
+          borderRadius: 10,
+          padding: 16,
+          marginBottom: 28,
+        }}
+      >
+        <label style={labelStyle}>Barber</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          {barbers.map((emp) => (
+            <button
+              key={emp.id}
+              onClick={() => setBarberId(emp.id)}
+              style={{
+                padding: "8px 14px",
+                borderRadius: 20,
+                border: `1px solid ${barberId === emp.id ? C.brass : "#3A3733"}`,
+                background: barberId === emp.id ? "rgba(184,147,95,0.15)" : "transparent",
+                color: barberId === emp.id ? C.brassBright : C.ivoryDim,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {emp.name}
+            </button>
+          ))}
+        </div>
+
+        <label style={labelStyle}>Your rating</label>
+        <div style={{ marginBottom: 14 }}>
+          <StarInput value={rating} onChange={setRating} />
+        </div>
+
+        <label style={labelStyle}>Comment (optional)</label>
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="How was your visit?"
+          rows={3}
+          style={{ ...inputStyle, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }}
+        />
+
+        <label style={{ ...labelStyle, marginTop: 14 }}>Your name (optional)</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Anonymous" style={inputStyle} />
+
+        <button
+          onClick={submit}
+          disabled={!barberId || !rating}
+          style={{
+            marginTop: 16,
+            width: "100%",
+            padding: "12px 0",
+            borderRadius: 8,
+            border: "none",
+            background: barberId && rating ? C.burgundy : "#3A3733",
+            color: C.ivory,
+            fontFamily: "'Fraunces', serif",
+            fontSize: 15,
+            cursor: barberId && rating ? "pointer" : "not-allowed",
+          }}
+        >
+          {submitted ? "Thank you!" : "Submit review"}
+        </button>
+      </div>
+
+      {/* Recent reviews */}
+      <div
+        style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: C.ivoryDim,
+          textTransform: "uppercase",
+          letterSpacing: 1,
+          marginBottom: 10,
+        }}
+      >
+        Recent reviews
+      </div>
+      {recent.length === 0 ? (
+        <div
+          style={{
+            border: `1px dashed #3A3733`,
+            borderRadius: 10,
+            padding: "20px 16px",
+            textAlign: "center",
+            color: C.ivoryDim,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 13,
+          }}
+        >
+          No reviews yet. Be the first!
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {recent.map((r) => {
+            const emp = employees.find((e) => e.id === r.employeeId);
+            return (
+              <div
+                key={r.id}
+                style={{
+                  background: C.charcoal2,
+                  border: "1px solid #3A3733",
+                  borderRadius: 10,
+                  padding: "12px 14px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontSize: 14, color: C.ivory }}>
+                    {emp?.name || "Unknown"}
+                  </div>
+                  <StarRow rating={r.rating} />
+                </div>
+                {r.comment && (
+                  <div
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 12,
+                      color: C.ivoryDim,
+                      lineHeight: 1.5,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {r.comment}
+                  </div>
+                )}
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#7A776E" }}>
+                  — {r.customerName}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const backBtnStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  background: "none",
+  border: "none",
+  color: C.ivoryDim,
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 12,
+  cursor: "pointer",
+  padding: 0,
+};
+
+const labelStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 11,
+  color: C.ivoryDim,
+  textTransform: "uppercase",
+  letterSpacing: 1,
+  marginBottom: 6,
+};
+
+const inputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "12px 14px",
+  borderRadius: 8,
+  border: "1px solid #3A3733",
+  background: C.charcoal2,
+  color: C.ivory,
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 14,
+  outline: "none",
+};
+
+export default function App() {
+  const [tab, setTab] = useState("book");
+  const [employees, setEmployees, employeesLoaded] = useSharedState(
+    "barbershop-employees",
+    DEFAULT_EMPLOYEES
+  );
+  const [statuses, setStatuses, statusesLoaded] = useSharedState(
+    "barbershop-statuses",
+    {}
+  );
+  const [clockIns, setClockIns, clockInsLoaded] = useSharedState(
+    "barbershop-clockins",
+    {}
+  );
+  const [clockOuts, setClockOuts, clockOutsLoaded] = useSharedState(
+    "barbershop-clockouts",
+    {}
+  );
+  const [bookings, setBookings, bookingsLoaded] = useSharedState(
+    "barbershop-bookings",
+    []
+  );
+  const [reviews, setReviews, reviewsLoaded] = useSharedState(
+    "barbershop-reviews",
+    []
+  );
+  const [notifications, setNotifications, notificationsLoaded] = useSharedState(
+    "barbershop-notifications",
+    []
+  );
+  const [loggedInId, setLoggedInId] = useState(null);
+
+  const loaded = employeesLoaded && statusesLoaded && clockInsLoaded && clockOutsLoaded && bookingsLoaded && reviewsLoaded && notificationsLoaded;
+  const anyoneIn = employees.some((e) => statuses[e.id]);
+  const viewerIsAdmin = !!employees.find((e) => e.id === loggedInId)?.isAdmin;
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: C.charcoal,
+        fontFamily: "'IBM Plex Mono', monospace",
+      }}
+    >
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      />
+
+      <div
+        style={{
+          borderBottom: "1px solid #33312D",
+          padding: "22px 20px 16px",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <Scissors size={20} color={C.brass} />
+        <div>
+          <div
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: 20,
+              color: C.ivory,
+              lineHeight: 1.1,
+            }}
+          >
+            Alsamou
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: anyoneIn ? "#7CA37A" : C.ivoryDim,
+              textTransform: "uppercase",
+              letterSpacing: 1.5,
+              marginTop: 3,
+            }}
+          >
+            <StatusDot on={anyoneIn} />
+            {anyoneIn ? "Open now" : "Closed right now"}
+          </div>
+          {anyoneIn && (
+            <div
+              style={{
+                fontSize: 11,
+                color: C.ivoryDim,
+                fontFamily: "'IBM Plex Mono', monospace",
+                marginTop: 4,
+                textTransform: "none",
+                letterSpacing: 0,
+              }}
+            >
+              On shift:{" "}
+              {employees
+                .filter((e) => statuses[e.id])
+                .map((e) =>
+                  viewerIsAdmin && clockIns[e.id]
+                    ? `${e.name} (since ${formatClockTime(clockIns[e.id])})`
+                    : e.name
+                )
+                .join(", ")}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", borderBottom: "1px solid #33312D" }}>
+        {[
+          { id: "book", label: "Book" },
+          { id: "reviews", label: "Reviews" },
+          { id: "staff", label: "Staff" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              flex: 1,
+              padding: "13px 0",
+              background: "none",
+              border: "none",
+              borderBottom: tab === t.id ? `2px solid ${C.brass}` : "2px solid transparent",
+              color: tab === t.id ? C.brassBright : C.ivoryDim,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              textTransform: "uppercase",
+              letterSpacing: 1.5,
+              cursor: "pointer",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {!loaded ? (
+        <div style={{ padding: 40, textAlign: "center", color: C.ivoryDim, fontSize: 12 }}>
+          Loading&hellip;
+        </div>
+      ) : tab === "staff" ? (
+        loggedInId ? (
+          <StaffView
+            employees={employees}
+            setEmployees={setEmployees}
+            statuses={statuses}
+            setStatuses={setStatuses}
+            clockIns={clockIns}
+            setClockIns={setClockIns}
+            clockOuts={clockOuts}
+            setClockOuts={setClockOuts}
+            bookings={bookings}
+            setBookings={setBookings}
+            notifications={notifications}
+            setNotifications={setNotifications}
+            loggedInId={loggedInId}
+            onLogout={() => setLoggedInId(null)}
+          />
+        ) : (
+          <StaffLogin employees={employees} onLogin={(id) => setLoggedInId(id)} />
+        )
+      ) : tab === "reviews" ? (
+        <ReviewsView employees={employees} reviews={reviews} setReviews={setReviews} />
+      ) : (
+        <BookView
+          employees={employees}
+          statuses={statuses}
+          bookings={bookings}
+          setBookings={setBookings}
+          notifications={notifications}
+          setNotifications={setNotifications}
+        />
+      )}
+    </div>
+  );
+}
